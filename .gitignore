@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 가상환경
+.venv/
+venv/
+
+# PyInstaller 빌드 산출물
+build/
+dist/
+*.spec
+
+# 로그 / 로컬 설정
+capture_debug.log
+settings.json
+
+# OS
+Thumbs.db
+desktop.ini
