@@ -91,7 +91,8 @@ _user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
 _SHELL_WINDOW_CLASSES = {
     "Shell_TrayWnd",            # 주 작업표시줄
     "Shell_SecondaryTrayWnd",   # 보조 모니터 작업표시줄
-    "NotifyIconOverflowWindow",  # 트레이 넘침 팝업
+    "NotifyIconOverflowWindow",  # 트레이 넘침 팝업 (Windows 10)
+    "TopLevelWindowForOverflowXamlIsland",  # 트레이 숨김 아이콘 팝업 (Windows 11)
     "Progman",                  # 바탕화면
     "WorkerW",                  # 바탕화면 워커
 }
@@ -567,21 +568,48 @@ class MainWindow(QWidget):
 
     def _do_active(self) -> None:
         try:
-            # 추적해 둔 '마지막 실제 창'을 우선 사용. 없으면 현재 포어그라운드.
-            hwnd = self._last_active_hwnd
-            x, y, w, h = window_rect(hwnd) if hwnd else active_window_rect()
-            if w <= 0 or h <= 0:
-                img = grab_fullscreen()
-                origin = None
+            if self._foreground_is_shell():
+                # 바탕화면·작업표시줄 등 셸 창이 활성 → 캡쳐할 실제 창이 없음.
+                # 직전 창(_last_active_hwnd)이 stale로 남아 엉뚱한 모니터가
+                # 잡히는 걸 막고, 커서가 있는 모니터를 캡쳐한다.
+                img, origin = self._grab_cursor_monitor()
             else:
-                img = grab_region(x, y, w, h)
-                dpr = QGuiApplication.primaryScreen().devicePixelRatio()
-                origin = QPoint(int(round(x / dpr)), int(round(y / dpr)))
+                # 추적해 둔 '마지막 실제 창'을 우선 사용. 없으면 현재 포어그라운드.
+                hwnd = self._last_active_hwnd
+                x, y, w, h = window_rect(hwnd) if hwnd else active_window_rect()
+                if w <= 0 or h <= 0:
+                    # 추적 창이 이미 닫혔거나 좌표를 못 얻음 → 커서 모니터로.
+                    img, origin = self._grab_cursor_monitor()
+                else:
+                    img = grab_region(x, y, w, h)
+                    dpr = QGuiApplication.primaryScreen().devicePixelRatio()
+                    origin = QPoint(int(round(x / dpr)), int(round(y / dpr)))
         except Exception as exc:
             print(f"[capture] active window error: {exc}", file=sys.stderr)
             self._restore_main()
             return
         self._process(img, origin=origin)
+
+    def _foreground_is_shell(self) -> bool:
+        """지금 포어그라운드가 바탕화면/작업표시줄 등 셸 창인지 판정."""
+        try:
+            hwnd = _user32.GetForegroundWindow()
+            if not hwnd:
+                return True  # 포어그라운드 없음 → 활성창 없음으로 취급
+            buf = ctypes.create_unicode_buffer(256)
+            _user32.GetClassNameW(hwnd, buf, 256)
+            return buf.value in _SHELL_WINDOW_CLASSES
+        except Exception:
+            return False
+
+    def _grab_cursor_monitor(self):
+        """마우스 커서가 있는 모니터 한 대를 캡쳐. (이미지, logical origin) 반환."""
+        screen = QGuiApplication.screenAt(QCursor.pos())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        geo = screen.geometry()  # logical global 좌표
+        img = grab_logical_region(geo)
+        return img, geo.topLeft()
 
     # ---- post-capture ----
     def _process(self, img, origin: QPoint | None = None) -> None:
