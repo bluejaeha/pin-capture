@@ -631,6 +631,7 @@ class MainWindow(QWidget):
             self._place_floating(fw, origin)
             fw.destroyed.connect(lambda *_: self._on_floating_destroyed(fw))
             fw.copied.connect(lambda fw=fw: self._register_clip_target(fw))
+            fw.changed.connect(lambda fw=fw: self._on_floating_changed(fw))
             self._floating.append(fw)
             fw.show()
             if copied_now:
@@ -647,6 +648,19 @@ class MainWindow(QWidget):
         """
         self._clip_fw = fw
         self._clip_seq = int(_user32.GetClipboardSequenceNumber())
+
+    def _on_floating_changed(self, fw: FloatingImage) -> None:
+        """플로팅 창에 주석을 그리면, 그 창이 현재 클립보드 주인일 때
+        클립보드를 그린 내용(주석 포함)으로 갱신한다.
+
+        자동복사는 캡쳐 순간 '원본'만 담으므로, 이후 그린 주석이
+        Ctrl+V 시 빠지던 문제를 해결한다. 중간에 사용자가 다른 것을
+        복사했으면(시퀀스 번호 불일치) 건드리지 않는다.
+        """
+        if self._clip_fw is fw and self._clip_seq is not None:
+            if int(_user32.GetClipboardSequenceNumber()) == self._clip_seq:
+                # flatten 재복사 → copied 시그널 → _register_clip_target 로 seq 갱신
+                fw.copy_to_clipboard()
 
     def _on_global_paste(self) -> None:
         fw = self._clip_fw
