@@ -22,6 +22,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QFileDialog,
     QGroupBox,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QPushButton,
+    QRadioButton,
     QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
@@ -43,6 +45,7 @@ from capture import (
     grab_region,
     window_rect,
 )
+from color_picker import ColorPicker
 from floating_window import FloatingImage, pil_to_clipboard_image, save_pil_with_dpi
 from hotkeys import (
     MOD_ALT,
@@ -214,8 +217,10 @@ class MainWindow(QWidget):
         self.save_dir.mkdir(parents=True, exist_ok=True)
 
         self._settings = load_settings()
+        self._color_format = self._settings.get("color_format", "hex")  # 'hex' | 'rgb'
         self._floating: list[FloatingImage] = []
         self._selector: RegionSelector | None = None
+        self._color_picker: ColorPicker | None = None
         self._was_visible = True
         self._tray_hint_shown = False
         self._really_quit = False
@@ -259,6 +264,20 @@ class MainWindow(QWidget):
         self.cb_autostart.setChecked(autostart.is_enabled())
         self.cb_autostart.toggled.connect(self._on_autostart_toggled)
 
+        # 색상 추출(스포이드) 형식 선택
+        fmt_row = QHBoxLayout()
+        fmt_row.addWidget(QLabel("색상 추출 형식:"))
+        self.rb_hex = QRadioButton("16진수 (#RRGGBB)")
+        self.rb_rgb = QRadioButton("RGB")
+        self._fmt_group = QButtonGroup(self)
+        self._fmt_group.addButton(self.rb_hex)
+        self._fmt_group.addButton(self.rb_rgb)
+        (self.rb_rgb if self._color_format == "rgb" else self.rb_hex).setChecked(True)
+        self.rb_hex.toggled.connect(self._on_color_format_changed)
+        fmt_row.addWidget(self.rb_hex)
+        fmt_row.addWidget(self.rb_rgb)
+        fmt_row.addStretch(1)
+
         path_row = QHBoxLayout()
         self.lbl_path = QLabel(str(self.save_dir))
         self.lbl_path.setStyleSheet("color: #666; font-size: 11px;")
@@ -282,6 +301,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.cb_clipboard)
         layout.addWidget(self.cb_save)
         layout.addWidget(self.cb_autostart)
+        layout.addLayout(fmt_row)
         layout.addLayout(path_row)
         layout.addWidget(self._build_hotkey_group())
 
@@ -632,6 +652,7 @@ class MainWindow(QWidget):
             fw.destroyed.connect(lambda *_: self._on_floating_destroyed(fw))
             fw.copied.connect(lambda fw=fw: self._register_clip_target(fw))
             fw.changed.connect(lambda fw=fw: self._on_floating_changed(fw))
+            fw.pick_color_requested.connect(self._start_color_pick)
             self._floating.append(fw)
             fw.show()
             if copied_now:
@@ -661,6 +682,53 @@ class MainWindow(QWidget):
             if int(_user32.GetClipboardSequenceNumber()) == self._clip_seq:
                 # flatten 재복사 → copied 시그널 → _register_clip_target 로 seq 갱신
                 fw.copy_to_clipboard()
+
+    # ---- 색상 추출(스포이드) ----
+    def _on_color_format_changed(self, _checked: bool) -> None:
+        self._color_format = "hex" if self.rb_hex.isChecked() else "rgb"
+        self._settings["color_format"] = self._color_format
+        save_settings(self._settings)
+
+    def _start_color_pick(self) -> None:
+        # 스포이드 시작 → 열려 있는 플로팅 창을 닫아 화면에서 치운다.
+        # (플로팅 창이 스냅샷/색 선택을 가리지 않도록)
+        for fw in list(self._floating):
+            fw.close()
+        # 창이 실제로 화면에서 사라진 뒤 스냅샷을 뜨도록 잠깐 딜레이
+        QTimer.singleShot(150, self._show_color_picker)
+
+    def _show_color_picker(self) -> None:
+        # 스포이드 중엔 '창 밖 우클릭 → 닫기' 감시를 잠시 멈춘다
+        # (취소용 우클릭이 남은 플로팅 창을 닫아버리지 않도록).
+        try:
+            self._rclick_watcher.stop()
+        except Exception:
+            pass
+        picker = ColorPicker()
+        picker.picked.connect(self._on_color_picked)
+        picker.picked.connect(lambda *_: self._end_color_pick())
+        picker.cancelled.connect(self._end_color_pick)
+        self._color_picker = picker
+        picker.show()
+
+    def _end_color_pick(self) -> None:
+        self._color_picker = None
+        if self._floating:
+            self._rclick_watcher.start()
+
+    def _on_color_picked(self, r: int, g: int, b: int) -> None:
+        if self._color_format == "rgb":
+            text = f"rgb({r}, {g}, {b})"
+        else:
+            text = f"#{r:02X}{g:02X}{b:02X}"
+        QApplication.clipboard().setText(text)
+        if hasattr(self, "tray"):
+            self.tray.showMessage(
+                "색상 추출",
+                f"클립보드에 복사됨:  {text}",
+                QSystemTrayIcon.Information,
+                2500,
+            )
 
     def _on_global_paste(self) -> None:
         fw = self._clip_fw

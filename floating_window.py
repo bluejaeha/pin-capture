@@ -125,6 +125,7 @@ def save_pil_with_dpi(img: Image.Image, path) -> None:
 class FloatingImage(QLabel):
     copied = Signal()   # 이 창의 이미지를 클립보드에 복사했을 때
     changed = Signal()  # 주석이 추가/취소/삭제되어 이미지 내용이 바뀌었을 때
+    pick_color_requested = Signal()  # 스포이드(색상 추출) 버튼을 눌렀을 때
 
     def __init__(self, pil_image: Image.Image) -> None:
         super().__init__()
@@ -205,6 +206,14 @@ class FloatingImage(QLabel):
         self._btn_width.setFixedSize(24, 22)
         self._btn_width.clicked.connect(self._cycle_width)
         lay.addWidget(self._btn_width)
+
+        # 색상 추출 (스포이드) — 화면 어디서나 클릭해 색을 복사
+        b_pick = QToolButton(bar)
+        b_pick.setText("💧")
+        b_pick.setToolTip("색상 추출 (스포이드) — 화면 어디서나 클릭해 색을 복사")
+        b_pick.setFixedSize(26, 22)
+        b_pick.clicked.connect(lambda: self.pick_color_requested.emit())
+        lay.addWidget(b_pick)
 
         # 실행취소
         b_undo = QToolButton(bar)
