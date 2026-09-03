@@ -58,6 +58,9 @@ from keyboard_watcher import GlobalPasteWatcher
 from region_selector import RegionSelector
 
 
+# 앱 버전 (배포 파일명은 CaptureApp.exe로 고정, 버전은 앱 안에서 표시)
+APP_VERSION = "1.3.1"
+
 # 핫키 ID (의미 있는 상수로)
 HK_REGION = 1
 HK_FULL = 2
@@ -208,7 +211,7 @@ def make_camera_icon() -> QIcon:
 class MainWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("화면 캡쳐")
+        self.setWindowTitle(f"화면 캡쳐 v{APP_VERSION}")
         self.setWindowIcon(make_camera_icon())
         self.resize(320, 270)
 
@@ -353,7 +356,9 @@ class MainWindow(QWidget):
     # ---- Tray ----
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(make_camera_icon(), self)
-        self.tray.setToolTip("화면 캡쳐  (좌/우클릭: 메뉴 / 더블클릭: 영역 캡쳐)")
+        self.tray.setToolTip(
+            f"화면 캡쳐 v{APP_VERSION}  (좌/우클릭: 메뉴 / 더블클릭: 영역 캡쳐)"
+        )
 
         menu = QMenu()
         self._tray_actions: dict[str, QAction] = {}
