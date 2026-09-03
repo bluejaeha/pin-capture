@@ -15,6 +15,7 @@ from PIL import Image
 from PySide6.QtCore import (
     QBuffer,
     QByteArray,
+    QEvent,
     QIODevice,
     QPoint,
     QPointF,
@@ -25,6 +26,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QGuiApplication,
     QImage,
     QPainter,
     QPainterPath,
@@ -48,6 +50,8 @@ from PySide6.QtWidgets import (
 PRESET_COLORS = ["#FF3B30", "#FFCC00", "#007AFF", "#34C759", "#000000", "#FFFFFF"]
 # 선 굵기 (클릭 순환)
 PRESET_WIDTHS = [2, 4, 6, 8]
+# 도구 순환 순서 (Tab 키)
+TOOL_ORDER = ["move", "rect", "arrow", "pen", "text"]
 
 
 @dataclass
@@ -136,12 +140,16 @@ class FloatingImage(QLabel):
         self._annotations: list[Annotation] = []
         self._draft: Annotation | None = None       # 그리는 중인 주석
         self._tool = "move"                          # 현재 도구
+        self._last_draw_tool = "rect"                # 직전에 쓰던 그리기 도구
         self._color_idx = 0                          # PRESET_COLORS 인덱스
         self._width = 4                              # 선 굵기
         self._text_edit: QLineEdit | None = None     # 글자 입력 중인 위젯
         self._text_pt: QPointF | None = None
         self._text_committed = False
         self._drag_offset: QPoint | None = None
+        self._tool_buttons: dict[str, QToolButton] = {}
+        self._press_pos: QPointF | None = None       # 클릭 시작 위치
+        self._moved = False                          # 드래그 여부(짧은클릭 판별)
 
         self.setWindowFlags(
             Qt.FramelessWindowHint
@@ -149,21 +157,31 @@ class FloatingImage(QLabel):
             | Qt.Tool
         )
         self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setFocusPolicy(Qt.StrongFocus)          # Tab 키 받기 위해
         self.setStyleSheet(
             "QLabel { border: 2px solid #00C8FF; background: #111; }"
         )
         self.setToolTip(
-            "상단 툴바: 도구 선택  |  드래그: 그리기/이동  |  휠: 확대/축소  "
-            "|  더블클릭: 닫기(이동 모드)  |  우클릭: 메뉴"
+            "짧은 클릭: 이동↔그리기 도구 전환  |  Tab: 도구 순환  |  "
+            "드래그: 그리기/창 이동  |  휠: 확대/축소  |  더블클릭: 닫기  |  우클릭: 메뉴"
         )
         self._render()
         self._build_toolbar()
 
-    # ---- 툴바 ----
+    # ---- 툴바 (캡쳐 바로 위에 붙는 별도 창) ----
     def _build_toolbar(self) -> None:
-        bar = QWidget(self)
+        # 이미지를 가리지 않도록 캡쳐 위에 얹는 독립 창.
+        # 포커스를 뺏지 않아야 Tab/단축키가 캡쳐 창에 계속 먹는다.
+        bar = QWidget(None)
+        bar.setWindowFlags(
+            Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Tool
+            | Qt.WindowDoesNotAcceptFocus
+        )
+        bar.setAttribute(Qt.WA_ShowWithoutActivating)
         bar.setStyleSheet(
-            "QWidget { background: rgba(20,20,20,210); border-radius: 4px; }"
+            "QWidget { background: rgba(20,20,20,235); border-radius: 4px; }"
             "QToolButton { color: #eee; border: none; font-size: 13px; }"
             "QToolButton:checked { background: #0078D4; border-radius: 3px; }"
         )
@@ -179,9 +197,11 @@ class FloatingImage(QLabel):
             b.setText(symbol)
             b.setToolTip(tip)
             b.setCheckable(True)
+            b.setFocusPolicy(Qt.NoFocus)
             b.setFixedSize(26, 22)
-            b.clicked.connect(lambda _=False, t=tool: self._set_tool(t))
+            b.clicked.connect(lambda _=False, t=tool: self._select_tool(t))
             self._tool_group.addButton(b)
+            self._tool_buttons[tool] = b
             lay.addWidget(b)
             return b
 
@@ -192,46 +212,54 @@ class FloatingImage(QLabel):
         add_tool("T", "text", "글자 넣기")
         self._btn_move.setChecked(True)
 
-        # 색상 (클릭 순환)
-        self._btn_color = QToolButton(bar)
-        self._btn_color.setText("●")
-        self._btn_color.setToolTip("색상 (클릭하면 순환)")
-        self._btn_color.setFixedSize(26, 22)
-        self._btn_color.clicked.connect(self._cycle_color)
-        lay.addWidget(self._btn_color)
+        def add_action(symbol: str, tip: str, slot) -> QToolButton:
+            b = QToolButton(bar)
+            b.setText(symbol)
+            b.setToolTip(tip)
+            b.setFocusPolicy(Qt.NoFocus)
+            b.setFixedSize(26, 22)
+            b.clicked.connect(slot)
+            lay.addWidget(b)
+            return b
 
-        # 굵기 (클릭 순환)
-        self._btn_width = QToolButton(bar)
-        self._btn_width.setToolTip("선 굵기 (클릭하면 순환)")
+        self._btn_color = add_action("●", "색상 (클릭하면 순환)", self._cycle_color)
+        self._btn_width = add_action("", "선 굵기 (클릭하면 순환)", self._cycle_width)
         self._btn_width.setFixedSize(24, 22)
-        self._btn_width.clicked.connect(self._cycle_width)
-        lay.addWidget(self._btn_width)
-
-        # 색상 추출 (스포이드) — 화면 어디서나 클릭해 색을 복사
-        b_pick = QToolButton(bar)
-        b_pick.setText("💧")
-        b_pick.setToolTip("색상 추출 (스포이드) — 화면 어디서나 클릭해 색을 복사")
-        b_pick.setFixedSize(26, 22)
-        b_pick.clicked.connect(lambda: self.pick_color_requested.emit())
-        lay.addWidget(b_pick)
-
-        # 실행취소
-        b_undo = QToolButton(bar)
-        b_undo.setText("↺")
-        b_undo.setToolTip("실행취소 (Ctrl+Z)")
+        add_action("💧", "색상 추출 (스포이드) — 화면 어디서나 클릭해 색을 복사",
+                   lambda: self.pick_color_requested.emit())
+        b_undo = add_action("↺", "실행취소 (Ctrl+Z)", self._undo)
         b_undo.setFixedSize(24, 22)
-        b_undo.clicked.connect(self._undo)
-        lay.addWidget(b_undo)
 
         bar.adjustSize()
-        bar.move(0, 0)
         self._toolbar = bar
         self._update_tool_style()
 
     def _set_tool(self, tool: str) -> None:
         self._commit_text()  # 도구 바꾸면 편집 중 글자 확정
         self._tool = tool
+        if tool != "move":
+            self._last_draw_tool = tool
         self.setCursor(Qt.ArrowCursor if tool == "move" else Qt.CrossCursor)
+
+    def _select_tool(self, tool: str) -> None:
+        """툴바 버튼 하이라이트까지 맞춰 도구 선택."""
+        btn = self._tool_buttons.get(tool)
+        if btn is not None:
+            btn.setChecked(True)
+        self._set_tool(tool)
+
+    def _toggle_tool(self) -> None:
+        """이동 ↔ 직전 그리기 도구 토글 (짧은 클릭)."""
+        target = self._last_draw_tool if self._tool == "move" else "move"
+        self._select_tool(target)
+
+    def _cycle_tool(self) -> None:
+        """전체 도구 순환 (Tab 키)."""
+        try:
+            i = TOOL_ORDER.index(self._tool)
+        except ValueError:
+            i = 0
+        self._select_tool(TOOL_ORDER[(i + 1) % len(TOOL_ORDER)])
 
     def _cycle_color(self) -> None:
         self._color_idx = (self._color_idx + 1) % len(PRESET_COLORS)
@@ -298,9 +326,7 @@ class FloatingImage(QLabel):
         pix.setDevicePixelRatio(dpr)
         self.setPixmap(pix)
         self.setFixedSize(logical_w, logical_h)
-        if getattr(self, "_toolbar", None) is not None:
-            self._toolbar.move(0, 0)
-            self._toolbar.raise_()
+        self._position_toolbar()
 
     def _draw_annotation(
         self, painter: QPainter, ann: Annotation, sx: float, sy: float
@@ -398,6 +424,8 @@ class FloatingImage(QLabel):
     def mousePressEvent(self, e):
         if e.button() != Qt.LeftButton:
             return
+        self._press_pos = e.position()   # 짧은클릭 판별용
+        self._moved = False
         if self._tool == "move":
             self._drag_offset = (
                 e.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -417,6 +445,15 @@ class FloatingImage(QLabel):
             )
 
     def mouseMoveEvent(self, e):
+        # 일정 거리 이상 움직이면 '드래그'로 판정 (짧은 클릭과 구분)
+        if (
+            not self._moved
+            and self._press_pos is not None
+            and (e.buttons() & Qt.LeftButton)
+        ):
+            d = e.position() - self._press_pos
+            if abs(d.x()) + abs(d.y()) > 5:
+                self._moved = True
         if self._tool == "move":
             if self._drag_offset is not None and (e.buttons() & Qt.LeftButton):
                 self.move(e.globalPosition().toPoint() - self._drag_offset)
@@ -431,14 +468,29 @@ class FloatingImage(QLabel):
         self._render()
 
     def mouseReleaseEvent(self, e):
+        if e.button() != Qt.LeftButton:
+            return
+        short_click = not self._moved
+        self._press_pos = None
+
         if self._tool == "move":
             self._drag_offset = None
+            if short_click:               # 짧은 클릭 → 그리기 도구로 전환
+                self._toggle_tool()
             return
-        if self._draft is None:
-            return
+        if self._tool == "text":
+            return                        # 텍스트는 press에서 입력창을 띄웠음
+
+        # rect / arrow / pen
         d = self._draft
         self._draft = None
-        # 점 찍기 수준의 너무 작은 도형은 버림
+        if short_click:                   # 짧은 클릭 → 도형 안 만들고 이동으로 전환
+            self._render()
+            self._toggle_tool()
+            return
+        if d is None:
+            return
+        # 드래그 → 도형 확정 (점 찍기 수준의 너무 작은 도형은 버림)
         if d.kind in ("rect", "arrow") and len(d.points) >= 2:
             (x0, y0), (x1, y1) = d.points[0], d.points[1]
             if abs(x1 - x0) < 3 and abs(y1 - y0) < 3:
@@ -451,8 +503,8 @@ class FloatingImage(QLabel):
         self._render()
         self.changed.emit()
 
-    def mouseDoubleClickEvent(self, _e):
-        if self._tool == "move":
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.LeftButton:
             self.close()
 
     def wheelEvent(self, e):
@@ -479,6 +531,56 @@ class FloatingImage(QLabel):
         elif e.key() == Qt.Key_0:
             self._scale = 1.0
             self._render()
+
+    def event(self, e):
+        # Tab 은 포커스 이동에 먼저 먹히므로 event()에서 가로채 도구 순환에 쓴다.
+        if e.type() == QEvent.Type.KeyPress and e.key() == Qt.Key_Tab:
+            self._cycle_tool()
+            return True
+        return super().event(e)
+
+    # ---- 툴바(별도 창) 따라다니기 ----
+    def _position_toolbar(self) -> None:
+        bar = getattr(self, "_toolbar", None)
+        if bar is None:
+            return
+        bar.adjustSize()
+        x = self.x()
+        y = self.y() - bar.height() - 2   # 캡쳐 바로 위 왼쪽상단
+        # 화면 최상단이라 위 공간이 없으면 캡쳐 안쪽 상단에 얹음(폴백)
+        scr = QGuiApplication.screenAt(self.frameGeometry().topLeft())
+        top = scr.geometry().top() if scr is not None else 0
+        if y < top:
+            y = self.y() + 2
+        bar.move(x, y)
+        bar.raise_()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if getattr(self, "_toolbar", None) is not None:
+            self._toolbar.show()
+            self._position_toolbar()
+        self.setFocus()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        if getattr(self, "_toolbar", None) is not None:
+            self._toolbar.hide()
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        self._position_toolbar()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._position_toolbar()
+
+    def closeEvent(self, e):
+        bar = getattr(self, "_toolbar", None)
+        if bar is not None:
+            bar.close()
+            self._toolbar = None
+        super().closeEvent(e)
 
     # ---- context menu ----
     def contextMenuEvent(self, e):

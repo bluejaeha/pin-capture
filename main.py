@@ -55,7 +55,6 @@ from hotkeys import (
     GlobalHotkeys,
 )
 from keyboard_watcher import GlobalPasteWatcher
-from mouse_watcher import GlobalRightClickWatcher
 from region_selector import RegionSelector
 
 
@@ -232,11 +231,6 @@ class MainWindow(QWidget):
         self._build_tray()
         self._install_hotkeys()
         self._install_foreground_tracker()
-
-        # 플로팅 창 '밖' 우클릭으로 닫기 위한 전역 우클릭 감시.
-        # 플로팅 창이 하나라도 떠 있을 때만 켠다.
-        self._rclick_watcher = GlobalRightClickWatcher()
-        self._rclick_watcher.right_pressed.connect(self._on_global_right_click)
 
         # 캡쳐를 붙여넣는 순간(Ctrl+V) 해당 플로팅 창을 닫기 위한 감시.
         # 클립보드 시퀀스 번호로 "아직 그 캡쳐가 클립보드에 있는지" 확인한다.
@@ -657,7 +651,6 @@ class MainWindow(QWidget):
             fw.show()
             if copied_now:
                 self._register_clip_target(fw)
-            self._rclick_watcher.start()  # 창 밖 우클릭 감시 시작
             self._paste_watcher.start()  # 붙여넣기(Ctrl+V) 감시 시작
 
         self._restore_main()
@@ -698,12 +691,6 @@ class MainWindow(QWidget):
         QTimer.singleShot(150, self._show_color_picker)
 
     def _show_color_picker(self) -> None:
-        # 스포이드 중엔 '창 밖 우클릭 → 닫기' 감시를 잠시 멈춘다
-        # (취소용 우클릭이 남은 플로팅 창을 닫아버리지 않도록).
-        try:
-            self._rclick_watcher.stop()
-        except Exception:
-            pass
         picker = ColorPicker()
         picker.picked.connect(self._on_color_picked)
         picker.picked.connect(lambda *_: self._end_color_pick())
@@ -713,8 +700,6 @@ class MainWindow(QWidget):
 
     def _end_color_pick(self) -> None:
         self._color_picker = None
-        if self._floating:
-            self._rclick_watcher.start()
 
     def _on_color_picked(self, r: int, g: int, b: int) -> None:
         if self._color_format == "rgb":
@@ -746,26 +731,7 @@ class MainWindow(QWidget):
         if self._clip_fw is fw:
             self._clip_fw = None
         if not self._floating:
-            self._rclick_watcher.stop()  # 남은 플로팅 없으면 감시 종료
             self._paste_watcher.stop()
-
-    def _on_global_right_click(self, px: int, py: int) -> None:
-        """전역 우클릭 물리 좌표(px, py) 기준으로, 그 점이 '밖'인
-        플로팅 창을 닫는다. 점이 안에 있는 창은 기존 우클릭 메뉴가 뜬다.
-        """
-        user32 = ctypes.windll.user32
-        for fw in list(self._floating):
-            try:
-                rect = wintypes.RECT()
-                if not user32.GetWindowRect(int(fw.winId()), ctypes.byref(rect)):
-                    continue
-                inside = (
-                    rect.left <= px < rect.right and rect.top <= py < rect.bottom
-                )
-                if not inside:
-                    fw.close()
-            except Exception:
-                pass
 
     def _place_floating(
         self, fw: FloatingImage, origin: QPoint | None = None
@@ -803,10 +769,6 @@ class MainWindow(QWidget):
                 fw.close()
             try:
                 self._fg_timer.stop()
-            except Exception:
-                pass
-            try:
-                self._rclick_watcher.stop()
             except Exception:
                 pass
             try:
