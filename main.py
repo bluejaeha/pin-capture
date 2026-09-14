@@ -9,11 +9,12 @@ from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QAction,
     QColor,
     QCursor,
+    QDesktopServices,
     QGuiApplication,
     QIcon,
     QKeySequence,
@@ -59,7 +60,12 @@ from region_selector import RegionSelector
 
 
 # 앱 버전 (배포 파일명은 CaptureApp.exe로 고정, 버전은 앱 안에서 표시)
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4.0"
+
+# 저작권·블로그
+COPYRIGHT = "© 2026 모래속에사는고래"
+BLOG_NAME = "계정과 코드"
+BLOG_URL = "https://blog.naver.com/sandwhale688"
 
 # 핫키 ID (의미 있는 상수로)
 HK_REGION = 1
@@ -302,6 +308,19 @@ class MainWindow(QWidget):
         layout.addLayout(path_row)
         layout.addWidget(self._build_hotkey_group())
 
+        # 저작권 + 블로그 링크 (맨 아래 푸터)
+        footer = QLabel(
+            f'<span style="color:#888;">{COPYRIGHT}</span>'
+            f'&nbsp;·&nbsp;'
+            f'<a href="{BLOG_URL}" style="color:#0078D4; text-decoration:none;">'
+            f'{BLOG_NAME}</a>'
+        )
+        footer.setOpenExternalLinks(True)   # 링크 클릭 시 브라우저로 열림
+        footer.setAlignment(Qt.AlignCenter)
+        footer.setStyleSheet("font-size: 11px;")
+        footer.setToolTip(BLOG_URL)
+        layout.addWidget(footer)
+
         self.btn_region.clicked.connect(self._capture_region)
         self.btn_full.clicked.connect(self._capture_full)
         self.btn_active.clicked.connect(self._capture_active)
@@ -381,6 +400,10 @@ class MainWindow(QWidget):
         a_open = QAction("저장 폴더 열기", self)
         a_open.triggered.connect(self._open_folder)
         menu.addAction(a_open)
+
+        a_blog = QAction(f"블로그 '{BLOG_NAME}' 열기", self)
+        a_blog.triggered.connect(self._open_blog)
+        menu.addAction(a_blog)
         menu.addSeparator()
 
         a_quit = QAction("종료", self)
@@ -533,6 +556,9 @@ class MainWindow(QWidget):
             os.startfile(self.save_dir)  # Windows
         except Exception as exc:
             print(f"[open folder] {exc}", file=sys.stderr)
+
+    def _open_blog(self) -> None:
+        QDesktopServices.openUrl(QUrl(BLOG_URL))
 
     def _show_main(self) -> None:
         self.show()
