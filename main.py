@@ -60,12 +60,13 @@ from region_selector import RegionSelector
 
 
 # 앱 버전 (배포 파일명은 CaptureApp.exe로 고정, 버전은 앱 안에서 표시)
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 
-# 저작권·블로그
+# 저작권·블로그·라이선스
 COPYRIGHT = "© 2026 모래속에사는고래"
 BLOG_NAME = "계정과 코드"
 BLOG_URL = "https://blog.naver.com/sandwhale688"
+LICENSE_TERMS = "무료 사용 · 재배포 금지 · 유료화 금지"
 
 # 핫키 ID (의미 있는 상수로)
 HK_REGION = 1
@@ -308,18 +309,22 @@ class MainWindow(QWidget):
         layout.addLayout(path_row)
         layout.addWidget(self._build_hotkey_group())
 
-        # 저작권 + 블로그 링크 (맨 아래 푸터)
+        # 저작권·블로그 + 라이선스 (맨 아래)
         footer = QLabel(
-            f'<span style="color:#888;">{COPYRIGHT}</span>'
-            f'&nbsp;·&nbsp;'
+            f'<span style="color:#888888;">{COPYRIGHT}</span>&nbsp;·&nbsp;'
             f'<a href="{BLOG_URL}" style="color:#0078D4; text-decoration:none;">'
             f'{BLOG_NAME}</a>'
         )
-        footer.setOpenExternalLinks(True)   # 링크 클릭 시 브라우저로 열림
+        footer.setOpenExternalLinks(True)   # 블로그 링크 클릭 시 브라우저
         footer.setAlignment(Qt.AlignCenter)
         footer.setStyleSheet("font-size: 11px;")
         footer.setToolTip(BLOG_URL)
         layout.addWidget(footer)
+
+        license_lbl = QLabel(LICENSE_TERMS)
+        license_lbl.setAlignment(Qt.AlignCenter)
+        license_lbl.setStyleSheet("color: #999999; font-size: 10px;")
+        layout.addWidget(license_lbl)
 
         self.btn_region.clicked.connect(self._capture_region)
         self.btn_full.clicked.connect(self._capture_full)
